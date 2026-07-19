@@ -54,9 +54,9 @@ The backend runs on a custom Docker stack (MQTT Broker, InfluxDB).
   /app                # Python ML scripts and classification logic
 /docs
   API.md              # LoRa Payload structure documentation
+```
 
-
-  # Forschungsgrundlage: Temperatur & Vibration für Volksvitalitäts-Monitoring
+# Forschungsgrundlage: Temperatur & Vibration für Volksvitalitäts-Monitoring
  
 Zusammenstellung relevanter Studien und offener Datensätze als Grundlage für den Software-/ML-Ansatz von ApisMonitor. Fokus: Erkenntnisse, die sich direkt auf Sensordesign, Sampling-Parameter und Klassifikationsstrategie übertragen lassen.
  
