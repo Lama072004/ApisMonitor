@@ -54,3 +54,62 @@ The backend runs on a custom Docker stack (MQTT Broker, InfluxDB).
   /app                # Python ML scripts and classification logic
 /docs
   API.md              # LoRa Payload structure documentation
+
+
+  # Forschungsgrundlage: Temperatur & Vibration für Volksvitalitäts-Monitoring
+ 
+Zusammenstellung relevanter Studien und offener Datensätze als Grundlage für den Software-/ML-Ansatz von ApisMonitor. Fokus: Erkenntnisse, die sich direkt auf Sensordesign, Sampling-Parameter und Klassifikationsstrategie übertragen lassen.
+ 
+## 1. Akustische Frequenzmuster (Referenz für Piezo-Auswertung)
+ 
+| Zustand | Beobachtetes Muster | Quelle |
+|---|---|---|
+| Nachtruhe / Wintercluster | Peaks bei 25–150 Hz | Ferrari et al. 2008 |
+| Normale Tagaktivität | Peaks bei 100/150–300 Hz | Ferrari et al. 2008 |
+| Erhöhte Erregung | Peaks bis 500–600 Hz | Ferrari et al. 2008 |
+| Schwarmvorbereitung | Anstieg der Leistungsdichte um ~110 Hz, kurz vor Auszug Anstieg auf ~300 Hz, teils Sprung 150→500 Hz | Ferrari et al. 2008, "Monitoring of swarming sounds in bee hives for early detection of the swarming period", *Computers and Electronics in Agriculture* 64 |
+| Weisellosigkeit | Zusätzliches Rauschen bei höheren Frequenzen, Tag/Nacht-Rhythmus bleibt erhalten | SAS4509-2020, "Noninvasive Beehive Monitoring through Acoustic Data" |
+| Varroa-Befall | Akustische Signatur nachweisbar, aber schwächer validiert | referenziert in Terenzi et al., div. Übersichtsarbeiten |
+ 
+## 2. Temperatur + Vibration kombiniert
+ 
+- **Schwarm-Temperaturkorrelation**: Innentemperatur steigt vor dem Schwarmauszug von ca. 33 °C auf 35 °C und fällt zum eigentlichen Auszugzeitpunkt auf ca. 32 °C — parallel zum bekannten akustischen Frequenzanstieg. Quelle: zitiert in Kulyukin & Mukherjee, *Applied Sciences* 8(9):1573, "Toward Audio Beehive Monitoring", mit Bezug auf Ferrari et al. 2008.
+  → **Implikation für die Software**: Temperatur- und Piezo-Signal sollten als fusionierte Feature-Kombination behandelt werden, nicht getrennt ausgewertet — ein gleichzeitiges Auftreten von Temperaturanstieg + Frequenzverschiebung ist ein deutlich robusteres Schwarm-Signal als jeder Kanal einzeln.
+- **Vibrationssensoren an der Zargenaußenwand**: Ramsey et al. analysierten Schwarmereignisse über Beschleunigungssensoren, die außen an der Zargenwand montiert waren (nicht zwischen den Waben) — methodische Bestätigung, dass strukturgebundene Vibrationsmessung (Körperschall durch die Beutenwand) für Schwarmerkennung funktioniert. Referenziert in Kulyukin & Mukherjee, *Applied Sciences* 8(9):1573.
+- **Reine Vibrationsklassifikation über volle Saison**: Ein System mit Vibrationssensoren auf den Brutwaben (Warschau-Typ-Beuten) erfasste 9 Monate Daten und klassifizierte damit fünf Lebenszyklusphasen des Volkes über CNN- und Extra-Trees-Modelle. Wichtiges Ergebnis: entscheidende Frequenzen liegen unter 1 kHz, Sampling-Rate von 2 kHz reicht ohne nennenswerten Genauigkeitsverlust (>95 % gewichtete Genauigkeit). Quelle: *Applied Sciences* 16(1):188, "Honey Bee Lifecycle Activity Prediction Using Non-Invasive Vibration Monitoring".
+  → **Implikation**: bestätigt niedrige Sampling-Rate/Rechenlast auf dem ESP als ausreichend.
+## 3. Temperatur-only Ansätze (Fallback-Modell ohne Akustik)
+ 
+- **Wachstumsphasen-Erkennung aus Temperatur-Zeitreihen**: Multivariate Temperatur-Feature-Extraktion (verschiedene Zeitskalen) + PCA zur Dimensionsreduktion, sechs ML-Modelle verglichen; ein BP-Netz (Backpropagation) erzielte die beste Performance (MAE 1,45 %). Quelle: *Sensors* 25(13):3916, "Honeybee Colony Growth Period Recognition Based on Multivariate Temperature Feature Extraction and Machine Learning".
+  → Nützlich als Fallback-Klassifikation, falls der Piezo-Kanal ausfällt.
+- **Temperaturabfall-Vorhersage (LSTM)**: Vorhersage von Temperaturabfällen 24 h im Voraus mit LSTM, trainiert auf Innentemperatur, Feuchte, Fächelaktivität, Lärm, Gewicht, Außentemperatur (RMSE 0,5 %). Quelle: *Computers and Electronics in Agriculture*, "Forecasting sudden drops of temperature in pre-overwintering honeybee colonies" (Datenbasis: Arnia-Monitoringsystem).
+  → Reduzierte Variante (nur Innen-/Außentemp + Piezo-Aktivität statt aller 6 Eingaben) als Winter-Frühwarnmodell denkbar.
+## 4. Wichtige methodische Einschränkung
+ 
+Mehrere Studien zeigen gute Klassifikationsgenauigkeit auf denselben, bereits im Training gesehenen Stöcken, aber **schlechte Generalisierung auf unbekannte, neue Völker** (u.a. explizit diskutiert in Uthoff et al. 2023 und in der BeeTogether-Studie). 
+→ **Konsequenz für die App-Architektur**: Klassifikation sollte als Anomalieerkennung gegen eine pro Stock individuell gelernte Baseline erfolgen (erste 1–2 Wochen nach Installation als Referenzzeitraum), nicht als global vortrainiertes, universelles Modell.
+ 
+## 5. Offene Datensätze (für Vortraining / Benchmarking vor eigenen Saisondaten)
+ 
+| Dataset | Umfang | Modalitäten | Link/Quelle |
+|---|---|---|---|
+| **UrBAN** | >3000 h Audio, 10 Stöcke | Audio, Temperatur, Feuchte, Varroa-/Winterausfall-Labels | Nature *Scientific Data* 12, 536 (2025), "Urban Beehive Acoustics and PheNotyping Dataset" |
+| **MSPB** | 53 Stöcke, Québec | Audio, Temperatur, Feuchte | Nature *Scientific Data*, "MSPB: a longitudinal multi-sensor dataset with phenotypic trait measurements" |
+| **NU-Hive** | 2 Stöcke, 96 h Audio | Audio, Temperatur, Feuchte, Weiselrichtigkeit gelabelt | referenziert in mehreren o.g. Studien |
+| **BUZZ** | 6 Stöcke | Audio (Bienensummen/Grille/Rauschen) | referenziert in TinyML-Survey (arXiv 2509.08822) |
+| **BeeTogether** | Zusammenführung mehrerer offener Audio-Datensätze | Standardisiertes Format, Data Augmentation | Kaggle, *Sensors* 24(18):6067 |
+ 
+## 6. Referenzliste (Kurzform)
+ 
+- Ferrari, S. et al. (2008). *Monitoring of swarming sounds in bee hives for early detection of the swarming period*. Computers and Electronics in Agriculture, 64, 72–77.
+- Uthoff, C., Homsi, M. N., von Bergen, M. (2023). *Acoustic and vibration monitoring of honeybee colonies for beekeeping-relevant aspects of presence of queen bee and swarming*. Computers and Electronics in Agriculture, 205, 107589.
+- Kulyukin, V., Mukherjee, S. (2018). *Toward Audio Beehive Monitoring: Deep Learning vs. Standard Machine Learning in Classifying Beehive Audio Samples*. Applied Sciences, 8(9), 1573.
+- (2026). *Honey Bee Lifecycle Activity Prediction Using Non-Invasive Vibration Monitoring*. Applied Sciences, 16(1), 188.
+- (2025). *Honeybee Colony Growth Period Recognition Based on Multivariate Temperature Feature Extraction and Machine Learning*. Sensors, 25(13), 3916.
+- *Forecasting sudden drops of temperature in pre-overwintering honeybee colonies*. Computers and Electronics in Agriculture (Arnia-Datensatz).
+- *UrBAN: Urban Beehive Acoustics and PheNotyping Dataset*. Scientific Data, 12, 536 (2025).
+- *MSPB: a longitudinal multi-sensor dataset with phenotypic trait measurements from honey bees*. Scientific Data (2024).
+- *Bee Together: Joining Bee Audio Datasets for Hive Extrapolation in AI-Based Monitoring*. Sensors, 24(18), 6067 (2024).
+- SAS4509-2020. *Noninvasive Beehive Monitoring through Acoustic Data*. SAS Institute.
+---
+*Hinweis: Diese Zusammenfassung dient als Ausgangspunkt für den ApisMonitor-Software-Ansatz. Für die konkrete Implementierung sollten die Originalarbeiten (insb. Methodik zu Feature-Extraktion und Modellwahl) im Volltext konsultiert werden.*
