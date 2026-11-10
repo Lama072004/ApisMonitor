@@ -1,73 +1,81 @@
 # ApisMonitor
- 
-ApisMonitor is a modular, repairable beehive monitoring system built with ESP32-C5 and LoRa. It tracks hive acoustics via a piezo element and measures cluster temperature to help detect swarming or queen loss. To ensure long-term durability, the design deliberately avoids propolis-prone gas or humidity sensors.
- 
+
+ApisMonitor is a modular, repairable and energy-autonomous beehive monitoring system built on ESP32-C3 and LoRa. Each hive node measures temperature and humidity inside the brood chamber all year round, without opening the hive and without changing batteries. All data ends up in Home Assistant, so no custom app or backend is required.
+
+> **Status:** design phase. Hardware, firmware and protocol described below are the planned specification; the first prototype (5 assembled boards) is not built yet.
+
 ## 🐝 Core Philosophy
- 
-Traditional beehive scales and sensors often fail due to propolis buildup or drain batteries within weeks because of heavy WiFi usage. ApisMonitor solves this through:
- 
-1. **Edge Computing:** The ESP32-C5 performs Fast Fourier Transform (FFT) directly on the node, extracting acoustic peaks.
-2. **LoRa Transmission:** Instead of raw audio, only a tiny 30–60 byte feature payload is sent via LoRa (EU868) every 30–60 minutes.
-3. **Propolis-Proof Sensors:** No gas, humidity, or VOC sensors. All internal sensors are fully potted or rely on structural vibration.
+
+Traditional beehive sensors often fail due to propolis buildup, condensation in winter, or batteries that drain within weeks. ApisMonitor addresses this with:
+
+1. **Ultra-Low-Power Design:** Deep sleep between measurements, solar charging and a frost-proof LiFePO4 cell for 365-day operation.
+2. **LoRa Transmission:** Tiny sensor payloads sent over LoRa (EU868) with a custom protocol, including relaying through neighbouring nodes if the master is out of direct range.
+3. **Propolis- and Condensation-Protected Sensor:** The temperature/humidity sensor has a factory-fitted dust- and water-repellent PTFE membrane and an integrated heater that removes condensation at near 100 % humidity and frost.
+4. **Home Assistant Integration:** The master publishes via MQTT discovery. Dashboards, history and push alerts come from Home Assistant and its companion app; remote access (Nabu Casa, Tailscale, ...) is up to the user, no port forwarding is required by the project itself.
 
 ## ⚙️ Hardware Architecture
- 
+
 ### Master-Slave Topology
- 
-- **Master Node:** ESP32-C5 + SX1262 LoRa Module + WiFi Uplink (MQTT/HTTPS to Docker Backend).
-- **Slave Nodes (The Hives):** ESP32-C5 + SX1262 LoRa Module. Communicates exclusively via LoRa.
 
-### Sensor Flex-PCB (Internal)
- 
-The sensors are mounted on a minimal flex-PCB (max 3×3 cm) that simply hangs over the edge of the brood box. No drilling required.
- 
-- **Acoustics:** Murata 7BB-12-9 piezo element (12 mm). Potted between two rigid pressure distribution plates to withstand the static weight of the supers (~60 kg) without bending — the failure mode of concern is uneven bending stress, not compressive strength.
-- **Temperature:** DS18B20 (1-Wire), fully potted. Measures the brood nest/winter cluster temperature.
-- **Light:** Photodiode to detect when the hive is opened.
+- **Slave Nodes (the hives):** ESP32-C3 + SX1262 LoRa. Measure, then send via LoRa. If the master cannot be reached directly, a slave hands its data to a neighbouring slave that can reach it (multi-hop relay, hop-limited).
+- **Master Node:** Same board as the slaves, different firmware. Receives all slave data via LoRa, uplinks to Home Assistant over WiFi (MQTT), powered by USB-C. Always listening.
+- **Configuration:** Measurement/transmit interval and heater thresholds are set per node via BLE during pairing. Later changes are distributed by the master to the slaves over LoRa.
 
-### Power Management (Ultra-Low-Power)
- 
-- **Battery:** 18650 LiFePO4 (3.2 V, 1500 mAh) — extremely cold-resistant and safe.
-- **Regulator:** High-efficiency buck-boost converter (e.g., TPS630xx) providing stable 3.3 V, as LiFePO4 drops from 3.65 V to 2.5 V.
-- **Charging:** CC/CV charging (via ICs like CN3058 or LTC4162-L) connected to a small 5 V solar panel. No trickle charging, to ensure battery longevity.
+### Main PCB
+
+- **Form factor:** Rigid 4-layer PCB, assembled by JLCPCB (SMT). Parts are chosen from JLCPCB Basic/Preferred parts wherever possible; Extended parts only where necessary (ESP32 module, SX1262, FHT31, charger IC).
+- **Stackup:** JLCPCB standard 4-layer (`JLC04161H-7628`, 1.6 mm). L1 signal/components, L2 continuous GND, L3 3.3 V plane, L4 signal. The 50 Ω RF trace runs on L1 above the unbroken GND plane L2. Trace width to be verified with the JLCPCB impedance calculator.
+- **Microcontroller:** ESP32-C3 module (DOIT ESPC3-12-N4, 4 MB flash; final module choice pending Basic/Preferred availability check). RISC-V, native USB for flashing and debugging (GPIO18/19), BLE 5 for pairing and configuration.
+- **LoRa:** Silicontra SX1262TR8-GC (868 MHz), BAT WIRELESS BWU.FL-IPEX1 SMD antenna connector (U.FL) to a weatherproof 868 MHz rubber duck antenna outside the housing. *Never transmit without an antenna connected.*
+- **User interface:** One button (starts BLE pairing / wakes the node) and one status LED.
+- **Battery monitoring:** Voltage divider to an ADC pin (switchable to avoid sleep current).
+
+### Sensor Board (internal)
+
+- **Sensor:** Nyfea FHT31-TR (I2C temperature and humidity, PTFE membrane, programmable heater), on a small separate board.
+- **Connection:** Fixed soldered cable (3V3, GND, SDA, SCL) to the main PCB, so the main PCB can stay outside the hive.
+
+### Power Management
+
+- **Battery:** 18650 LiFePO4 (3.2 V nominal), standard cell holder. LiFePO4 is frost-proof, long-lived (3000+ cycles) and safe.
+- **Charger:** CONSONANCE CN3058E, CC/CV for LiFePO4 (3.6 V), inputs for a small 5 V solar panel (JST connector) and USB-C. Charging below 0 °C must be prevented (LiFePO4 limitation); how this is done is still to be decided.
+- **Regulator:** Buck-boost converter (e.g. TPS63001) for a stable 3.3 V from 2.5–3.65 V cell voltage.
 
 ## 🔒 Security
- 
-- **Pairing:** Initial slave onboarding is done via Bluetooth (BLE) at the hive to prevent accidental pairing with neighboring systems.
-- **Encryption:** Individual AES-128 session keys per node.
-- **Replay Protection:** AEAD encryption (AES-CCM/ChaCha20-Poly1305) with a monotonically increasing counter.
 
-## 📊 Software & Backend
- 
-The backend runs on a custom Docker stack (MQTT Broker, InfluxDB).
- 
-- **No Fixed Thresholds:** Swarm or queenlessness detection is not based on static Hz thresholds. The backend uses machine learning to establish a baseline for each specific hive during the first 1–2 weeks.
-- **Known Acoustic Patterns:**
-  - *Night/Cluster:* Peaks at 25–150 Hz
-  - *Normal Day Activity:* Peaks at 100–300 Hz
-  - *Swarm Prep:* Power density rise around 110 Hz, jumping to ~300 Hz shortly before swarming
-  - *Queenlessness:* High-frequency noise, subtle volume shifts
+- **Pairing:** Initial onboarding via BLE at the hive, to prevent accidental pairing with neighbouring systems. The shared network key is transferred during pairing.
+- **Encryption:** AES-128 network key per installation.
+- **Replay Protection:** Authenticated encryption (AEAD, e.g. AES-CCM) with a monotonically increasing message counter.
+
+## 📊 Software & Integration
+
+- **Firmware:** ESP-IDF (C/C++), deep-sleep-centred, SX1262 LoRa stack, BLE configuration, relay logic with hop limit and duplicate detection.
+- **Home Assistant:** The master publishes each slave as a device via MQTT discovery (temperature, humidity, battery voltage, signal quality). Alerts and history are handled by Home Assistant.
+- **BLE configuration client:** Still open: Web Bluetooth page (Chrome on Android/PC) or a small Flutter app.
+- **Duty cycle:** EU868 limits airtime to 1 %, so relaying should stay the exception and payloads small.
 
 ## 📂 Repository Structure
- 
+
     /hardware
-      /easyeda_source     # Exported EasyEDA project files (.json) for Main-PCB & Flex-PCB
-      /production         # Gerber files, BOM, and CPL for manufacturing (e.g., JLCPCB)
+      /easyeda_source     # Local EasyEDA project files: main PCB and sensor board
+      /production         # Gerber files, BOM, and CPL for manufacturing (JLCPCB)
       /schematics         # Schematics in PDF format
-      /mech               # CAD files (.stl, .step) for enclosures and piezo pressure plates
+      /mech               # CAD files (.stl, .step) for the enclosure
     /firmware
-      /src                # ESP-IDF C/C++ source code (FFT logic, LoRa stack, mbedTLS)
+      /src                # ESP-IDF C/C++ source code (LoRa stack, relay, BLE, mbedTLS)
       /include            # Header files
-    /backend
-      /docker             # Docker-Compose setup (Mosquitto, InfluxDB)
-      /app                # Python ML scripts and classification logic
+    /homeassistant        # MQTT discovery examples, dashboards, automations
     /docs
       API.md              # LoRa payload structure documentation
-      RESEARCH.md         # Research references (this section, extracted as standalone file)
- 
+      RESEARCH.md         # Research references (background section below)
+
 ---
- 
-## 📚 Research Foundation: Temperature & Vibration for Colony Vitality Monitoring
+
+## 📚 Background Research (earlier acoustic concept)
+
+> The current hardware has no piezo/acoustic sensor. The research below comes from the earlier acoustic concept and is kept as background and as a basis for possible future extensions (temperature-based colony state recognition in sections 2 and 3 stays relevant).
+
+### Temperature & Vibration for Colony Vitality Monitoring
  
 Compilation of relevant studies and open datasets as a foundation for the software/ML approach of ApisMonitor. Focus: Findings that can be directly applied to sensor design, sampling parameters, and classification strategy.
  
